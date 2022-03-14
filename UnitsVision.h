@@ -40,6 +40,8 @@
 #include <vector>
 #include <algorithm>
 #include <array>
+#include <thread>
+#include <future>
 
 namespace visEval {
 	using id = int;
@@ -96,7 +98,6 @@ public:
 	return Matrix;
 }
 
-
 /*
 * Последовательность действий:
 * 1. Выделяем квадрат вокруг объекта.
@@ -126,10 +127,18 @@ public:
 
 		std::vector<extendedUnitInfo> alternative2DMap;
 
+		std::mutex m;
+		std::condition_variable eval_ended;
+
+
+		std::atomic <int> units_computated;
+		std::atomic <int> pieces_computated;
 
 		int gradient_search(position_t not_less_than, position_t not_greater_than);
 
+
 		bool check_vision_sector(visionVector_t sector_vector, const unitInfo& unit_info, position_t object_position);
+
 
 		UnitsVision(UnitsVision&) = delete;
 		UnitsVision(UnitsVision&&) = delete;
@@ -137,7 +146,12 @@ public:
 
 		UnitsVision() = default;
 
+
+		/* "Жадный" вариант - получает данные и сразу их обсчитывает */
 		void evaluateVision(std::map<id, unitInfo> units);
+		/* "Ленивый" вариант - обсчитывает ранее предоставленные и упорядоченные данные */
+		void evaluateVision();
+
 
 		std::vector<std::pair<id, int>> getVisibleUnitsAmount();
 	};

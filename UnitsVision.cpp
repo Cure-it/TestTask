@@ -6,6 +6,7 @@ using namespace visEval;
 auto visionDistanceMatrix = DistanceMapping<2>();
 
 
+
 int UnitsVision::gradient_search(position_t not_less_than, position_t not_greater_than) {
 	auto vec_it1 = alternative2DMap.begin();
 	int size = static_cast<int>(alternative2DMap.size());
@@ -46,6 +47,7 @@ int UnitsVision::gradient_search(position_t not_less_than, position_t not_greate
 			return index;
 	}
 };
+
 
 
 bool UnitsVision::check_vision_sector(visionVector_t sector_vector, const unitInfo& unit_info, position_t object_position)
@@ -93,12 +95,14 @@ bool UnitsVision::check_vision_sector(visionVector_t sector_vector, const unitIn
 }
 
 
+
+
+
+
+
 void UnitsVision::evaluateVision(std::map<id, unitInfo> units)
 {
-	if (visionSector <= 0 || visionDistance <= 0)
-		return;
-	/* Сначала заполняем вектор, потом упорядочиваем его. Или сразу заполнять упорядоченным? */
-
+	/* Сначала заполняем вектор, потом упорядочиваем его */
 	alternative2DMap.resize(units.size());
 	alternative2DMap.clear();
 	for (const auto& it : units) {
@@ -107,80 +111,99 @@ void UnitsVision::evaluateVision(std::map<id, unitInfo> units)
 
 	std::sort(alternative2DMap.begin(), alternative2DMap.end(), extendedUnitInfo::PositionCompare());
 
-	for (auto& unit : alternative2DMap)
-	{
-		if (unit.Info.visionVector.v_cos == 0 && unit.Info.visionVector.v_sin == 0)
-			throw - 1; // не указан радиус-вектор
-		auto left = unit.Info.position.p_x - visionDistance;
-		auto right = unit.Info.position.p_x + visionDistance;
+	evaluateVision();
+}
 
-		auto top = unit.Info.position.p_y + visionDistance;
-		auto bottom = unit.Info.position.p_y - visionDistance;
+void UnitsVision::evaluateVision()
+{
+	if (visionSector <= 0 || visionDistance <= 0)
+		return;
 
+	/* Можно ограничить часть потоков, чтобы не забирать все потоки и не мешать параллельно работающим сервисам */
+	/*int max_thread = std::thread::hardware_concurrency();
+	max_thread = max_thread > 4 ? max_thread - 3: 1;*/
 
-		visionVector_t left_vision_sector_vector;
-		visionVector_t right_vision_sector_vector;
+	auto evaluate_vision = [&](int start_index, int amount) {
+		int end_index = start_index + amount;
+		if (end_index >= alternative2DMap.size())
+			end_index = alternative2DMap.size();
 
-		if (visionSector < 360) {
-			/*
-			* sin(a + b) = sin(a) * cos(b) + cos(a) * sin(b)
-			* sin(a - b) = sin(a) * cos(b) - cos(a) * sin(b)
-			* cos(a + b) = cos(a) * cos(b) - sin(a) * sin(b)
-			* cos(a - b) = cos(a) * cos(b) + sin(a) * sin(b)
-			*
-			* left = sight + sector/2;
-			* right = sight - sector/2
-			*/
-			left_vision_sector_vector.v_sin = unit.Info.visionVector.v_sin * cos_VisionSectorAngle + unit.Info.visionVector.v_cos * sin_VisionSectorAngle;
-			left_vision_sector_vector.v_cos = unit.Info.visionVector.v_cos * cos_VisionSectorAngle - unit.Info.visionVector.v_sin * sin_VisionSectorAngle;
+		for (int i = start_index; i < end_index; i++)
+		{
+			units_computated++;
+			auto& unit = alternative2DMap.at(i);
+			int howManySeeUnits = 0;
 
-			right_vision_sector_vector.v_sin = unit.Info.visionVector.v_sin * cos_VisionSectorAngle - unit.Info.visionVector.v_cos * sin_VisionSectorAngle;
-			right_vision_sector_vector.v_cos = unit.Info.visionVector.v_cos * cos_VisionSectorAngle + unit.Info.visionVector.v_sin * sin_VisionSectorAngle;
-		}
+			if (unit.Info.visionVector.v_cos == 0 && unit.Info.visionVector.v_sin == 0)
+				throw - 1; // не указан радиус-вектор
+			auto left = unit.Info.position.p_x - visionDistance;
+			auto right = unit.Info.position.p_x + visionDistance;
 
-		/* Проверить квадрат */
-		/* Для упорядоченного вектора используем бинарный поиск */
-		int y = bottom;
-		int x = left;
-		auto unit_check = alternative2DMap.at(gradient_search({ y, x } , {top, right}));
-
-		while (unit_check.Info.position.p_y <= top || unit_check.Info.position.p_x <= right) {
-			if (unit_check.unit_id != unit.unit_id) {
-				auto test_vert = unit_check.Info.position.p_y - bottom;
-				auto test_hor = unit_check.Info.position.p_x - left;
-				if (visionDistanceMatrix[unit_check.Info.position.p_y - bottom][unit_check.Info.position.p_x - left]) {
-					if (visionSector < 360)
-					{
-						/*
-						* Здесь мы точно знаем, что другой юнит находится в дистанции зрения текущего юнита.
-						* Наша задача - понять, входит ли он в сектор зрения. Чуть ранее мы отложили 3 вектора - направление взгляда, левый край сектора зрения и правый край.
-						* Если объект входит, то вектор от другого юнита к текущему юниту может быть представлен как линейная комбинация вектора взгляда и правого или левого вектора
-						* сектора.
-						*
-						* Для этого решаем систему линейных уравнений для радиус-векторов.
-						*/
-						int already_see = 0;
+			auto top = unit.Info.position.p_y + visionDistance;
+			auto bottom = unit.Info.position.p_y - visionDistance;
 
 
-						if (check_vision_sector(left_vision_sector_vector, unit.Info, unit_check.Info.position)) { // если оба мультипликатора положительные - сектор обзора включает точку другого юнита
-							unit.howManySeeUnits++;
-							already_see++;
-						}
+			visionVector_t left_vision_sector_vector;
+			visionVector_t right_vision_sector_vector;
 
-						/* Если цель лежит ровно в направлении взгляда - надо избежать двойного учёта */
-						if (!already_see) {
-							if (check_vision_sector(right_vision_sector_vector, unit.Info, unit_check.Info.position)) { // если оба мультипликатора положительные - сектор обзора включает точку другого юнита
-								unit.howManySeeUnits++;
+			if (visionSector < 360) {
+				/*
+				* sin(a + b) = sin(a) * cos(b) + cos(a) * sin(b)
+				* sin(a - b) = sin(a) * cos(b) - cos(a) * sin(b)
+				* cos(a + b) = cos(a) * cos(b) - sin(a) * sin(b)
+				* cos(a - b) = cos(a) * cos(b) + sin(a) * sin(b)
+				*
+				* left = sight + sector/2;
+				* right = sight - sector/2
+				*/
+				left_vision_sector_vector.v_sin = unit.Info.visionVector.v_sin * cos_VisionSectorAngle + unit.Info.visionVector.v_cos * sin_VisionSectorAngle;
+				left_vision_sector_vector.v_cos = unit.Info.visionVector.v_cos * cos_VisionSectorAngle - unit.Info.visionVector.v_sin * sin_VisionSectorAngle;
+
+				right_vision_sector_vector.v_sin = unit.Info.visionVector.v_sin * cos_VisionSectorAngle - unit.Info.visionVector.v_cos * sin_VisionSectorAngle;
+				right_vision_sector_vector.v_cos = unit.Info.visionVector.v_cos * cos_VisionSectorAngle + unit.Info.visionVector.v_sin * sin_VisionSectorAngle;
+			}
+
+			/* Проверить квадрат */
+			/* Для упорядоченного вектора используем бинарный поиск */
+			auto unit_check = alternative2DMap.at(gradient_search({ bottom, left }, { top, right }));
+			int x, y;
+			while (unit_check.Info.position.p_y <= top || unit_check.Info.position.p_x <= right) {
+				
+				if (unit_check.unit_id != unit.unit_id) {
+					if (visionDistanceMatrix[unit_check.Info.position.p_y - bottom][unit_check.Info.position.p_x - left]) {
+						if (visionSector < 360)
+						{
+							/*
+							* Здесь мы точно знаем, что другой юнит находится в дистанции зрения текущего юнита.
+							* Наша задача - понять, входит ли он в сектор зрения. Чуть ранее мы отложили 3 вектора - направление взгляда, левый край сектора зрения и правый край.
+							* Если объект входит, то вектор от другого юнита к текущему юниту может быть представлен как линейная комбинация вектора взгляда и правого или левого вектора
+							* сектора.
+							*
+							* Для этого решаем систему линейных уравнений для радиус-векторов.
+							*/
+							int already_see = 0;
+
+
+							if (check_vision_sector(left_vision_sector_vector, unit.Info, unit_check.Info.position)) { 
+								howManySeeUnits++;
 								already_see++;
 							}
+
+							/* Если цель лежит ровно в направлении взгляда - надо избежать двойного учёта */
+							if (!already_see) {
+								if (check_vision_sector(right_vision_sector_vector, unit.Info, unit_check.Info.position)) { 
+									howManySeeUnits++;
+									already_see++;
+								}
+							}
+
+
 						}
-
-
+						else
+							unit.howManySeeUnits++;
 					}
-					else
-						unit.howManySeeUnits++;
 				}
-			}
+
 				x = unit_check.Info.position.p_x + 1;
 				if (x > right) {
 					y = unit_check.Info.position.p_y + 1;
@@ -190,14 +213,40 @@ void UnitsVision::evaluateVision(std::map<id, unitInfo> units)
 				else
 					y = unit_check.Info.position.p_y;
 
-				int index = gradient_search({ y, x }, {top, right});
+				int index = gradient_search({ y, x }, { top, right });
 				if (index >= alternative2DMap.size())
 					break;
 
 				unit_check = alternative2DMap.at(index);
+			}
+			alternative2DMap.at(i).howManySeeUnits = howManySeeUnits;
 		}
-	}
+		pieces_computated.fetch_add(1, std::memory_order_release);
+		eval_ended.notify_one();
+	};
+
+
+	std::unique_lock<std::mutex> lk(m);
+
+	pieces_computated.store(0, std::memory_order_release);
+	int start_index = 0;
+	int end_index = 0;
+	int pieces = 0;
+	do {
+		end_index += (alternative2DMap.size() - end_index) > 2000 ? 2000 : alternative2DMap.size();
+		std::async(std::launch::async, evaluate_vision, start_index, end_index - start_index);
+		pieces++;
+		start_index += end_index;
+	} while (end_index < alternative2DMap.size());
+	
+	
+	eval_ended.wait(lk, [this, pieces] { return pieces_computated.load(std::memory_order_acquire) == pieces;  });
 }
+
+
+
+
+
 
 
 using id = int;

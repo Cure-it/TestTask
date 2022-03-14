@@ -1,6 +1,7 @@
 #pragma once
 #include "UnitsVision.h"
-
+#include <unordered_set>
+#include <random>
 /*
 * 0) Для реализации вычислений выбран подсчёт на CPU, а не GPU. Во-первых, GPU используется для рендера графики и ему будет чем заняться и без этих вычислений.
 * Во-вторых, https://habr.com/ru/company/dbtc/blog/498374/ - автор показывает, что для небольших и несложных вычислений вопросы загрузки-выгрузки данных в память GPU 
@@ -57,6 +58,43 @@ public:
 	const std::map<id, unitInfo>& operator() (void)
 	{
 		return m_unitsHandmade;
+	}
+
+
+	std::map<id, unitInfo> getRandomGeneration(int amount)
+	{
+		struct KeyHash {
+			std::size_t operator()(const position_t& key) const
+			{
+				return key.p_x ^ (key.p_y << 1);
+			}
+		};
+
+		struct KeyEqual {
+			bool operator()(const position_t& lhs, const position_t& rhs) const
+			{
+				return (lhs.p_x == rhs.p_x && lhs.p_y == rhs.p_y);
+			}
+		};
+		
+		std::unordered_set<position_t, KeyHash, KeyEqual> positions;
+
+		std::random_device randomizer;
+		std::mt19937 gen(randomizer()); 
+		std::uniform_int_distribution<> distrib(-5000, 5000);
+		
+		while (positions.size() < amount)
+			positions.insert({ distrib(gen), distrib(gen) });
+
+		std::uniform_real_distribution<> real_distrub(0.f, 1.f);
+		std::map<id, unitInfo> test;
+		float sinus = 0;
+		for (auto& it : positions) {
+			sinus = static_cast<float>(real_distrub(gen));
+			test.insert({ get_next_num(), unitInfo(it, { sinus, static_cast<float>(sqrt(1 - pow(sinus,2))) } ) } );
+		}
+
+		return test;
 	}
 
 
